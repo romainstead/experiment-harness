@@ -168,6 +168,6 @@ def run_correct_param_and_clean_git_check(config):
         if value <= 0:
             raise SystemExit(f"{name} должен быть > 0, получено {value}")
 
-    dirty = subprocess.run(["git", "status", "‐‐porcelain"], capture_output=True, text=True).stdout.strip()
+    dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True).stdout.strip()
     if dirty:
         raise SystemExit("Есть незакоммиченные изменения — итоговый запуск невозможен:\n" + dirty)
