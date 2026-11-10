@@ -1,14 +1,19 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+
+import mlflow
 import numpy as np
 import sklearn
 import yaml
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from utils import seed_everything, configure_mlp, train_model, make_dataset
+from utils import seed_everything, configure_mlp, train_model, make_dataset, eval_model, CSV_FIELDS
+import uuid
+import csv
 
 
 def prepare_data(split_seed):
@@ -50,13 +55,19 @@ def load_yaml(path):
 
 
 def main():
+    os.makedirs("runs", exist_ok=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--eval-test", action="store_true")
     args = parser.parse_args()
+
     config = load_yaml(args.config)
     seed_everything(seed=args.seed, num_threads=1)
+
+    mlflow.set_tracking_uri("http://127.0.0.1:5000")
+    mlflow.set_experiment(config.get("experiment"))
+
     split_seed = int(config.get("split_seed"))
     batch_size = int(config.get("train").get("batch_size"))
     lr = float(config.get("train").get("lr"))
@@ -66,18 +77,46 @@ def main():
     hidden_layers = int(config.get("model").get("hidden"))
     n_layers = int(config.get("model").get("n_layers"))
     dropout = float(config.get("model").get("dropout"))
-    X, y, train, val, _, _ = prepare_data(split_seed=split_seed)
-    train_loader = DataLoader(make_dataset(X, y, train), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(make_dataset(X, y, val), batch_size=batch_size)
-    model = configure_mlp(n_layers, hidden_layers, dropout)
-    train_model(
-        model,
-        num_epochs=epochs,
-        lr=lr,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        weight_decay=weight_decay,
-    )
+
+    run_id = uuid.uuid4().hex
+    os.makedirs(f"runs/{run_id}")
+    with open(f"runs/{run_id}/config.yaml", "w") as yaml_config:
+        yaml.dump(config, yaml_config)
+    with open(f"runs/{run_id}/history.csv", "w", newline='') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(CSV_FIELDS)
+
+        with mlflow.start_run(run_name=run_id) as run:
+            mlflow.log_params({
+                "seed": args.seed,
+                "split_seed": split_seed,
+                "lr": lr,
+                "batch_size": batch_size,
+                "weight_decay": weight_decay,
+                "epochs": epochs,
+                "n_layers": n_layers,
+                "hidden": hidden_layers,
+                "dropout": dropout,
+            })
+            X, y, train, val, test, sha = prepare_data(split_seed=split_seed)
+            mlflow.set_tag("split_sha256", sha)
+            train_loader = DataLoader(make_dataset(X, y, train), batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(make_dataset(X, y, val), batch_size=batch_size)
+
+            model = configure_mlp(n_layers, hidden_layers, dropout)
+            train_model(
+                model,
+                num_epochs=epochs,
+                lr=lr,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                weight_decay=weight_decay,
+                csv_file=csv_file
+            )
+            if args.eval_test:
+                test_loader = DataLoader(make_dataset(X, y, test), batch_size=batch_size)
+                test_accuracy = eval_model(model, test_loader)
+                print(f"Test accuracy: {test_accuracy:.2%}")
 
 
 if __name__ == "__main__":

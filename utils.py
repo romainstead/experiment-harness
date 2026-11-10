@@ -1,9 +1,14 @@
 import os
 import random
+import time
 
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset
+import mlflow
+import csv
+
+CSV_FIELDS = ["epoch", "train_loss", "train_acc", "val_loss", "val_acc", "epoch_time"]
 
 
 def seed_everything(seed=0, num_threads=1):
@@ -29,13 +34,14 @@ def configure_mlp(n_layers: int, hidden: int, dropout: float):
     return torch.nn.Sequential(*layers)
 
 
-def train_model(model, num_epochs: int, lr: float, train_loader, val_loader, weight_decay,
+def train_model(model, num_epochs: int, lr: float, train_loader, val_loader, weight_decay, csv_file,
                 device="cpu"):
     model = model.to(device)
     loss = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     for epoch in range(num_epochs):
+        epoch_start = time.perf_counter()
         train_correct = 0
         train_total = 0
         train_loss = 0
@@ -70,13 +76,48 @@ def train_model(model, num_epochs: int, lr: float, train_loader, val_loader, wei
                 val_loss += loss(outputs, labels).item() * labels.size(0)
             val_loss /= val_total
 
+            epoch_end = time.perf_counter()
+            epoch_time = epoch_end - epoch_start
+            metrics = {
+                "epoch": epoch + 1,
+                "train_loss": round(train_loss, 4),
+                "train_acc": round(train_correct / train_total, 4),
+                "val_loss": round(val_loss, 4),
+                "val_acc": round(val_correct / val_total, 4),
+                "epoch_time": round(epoch_time, 4),
+            }
+            if mlflow.active_run() is not None:
+                mlflow.log_metrics(metrics, step=epoch + 1)
+
             print(
                 f'Epoch {epoch + 1}/{num_epochs}\n'
                 f'train loss={train_loss:.4f}\n'
                 f'val loss={val_loss:.4f}\n'
                 f'train acc={train_correct / train_total:.4f}\n'
                 f'val acc={val_correct / val_total:.4f}\n')
+
+            writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELDS)
+            writer.writerows([metrics])
     return model
+
+
+def eval_model(model, test_loader, device="cpu"):
+    model.eval()
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for digits, labels in test_loader:
+            digits = digits.to(device)
+            labels = labels.to(device)
+
+            outputs = model(digits)
+            predicted = outputs.argmax(dim=1)
+
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    return correct / total
 
 
 def make_dataset(X, y, idxs):
