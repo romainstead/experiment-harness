@@ -1,8 +1,10 @@
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import numpy as np
 import sklearn
+import yaml
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
@@ -41,19 +43,40 @@ def prepare_data(split_seed):
     return X, y, train, val, test, sha
 
 
+def load_yaml(path):
+    with open(path, "r") as f:
+        data = yaml.safe_load(f)
+    return data
+
+
 def main():
-    seed_everything(seed=0, num_threads=1)
-    X, y, train, val, _, _ = prepare_data(split_seed=0)
-    train_loader = DataLoader(make_dataset(X, y, train), batch_size=64, shuffle=True)
-    val_loader = DataLoader(make_dataset(X, y, val), batch_size=64)
-    model = configure_mlp(1, 64, 0.0)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--eval-test", action="store_true")
+    args = parser.parse_args()
+    config = load_yaml(args.config)
+    seed_everything(seed=args.seed, num_threads=1)
+    split_seed = int(config.get("split_seed"))
+    batch_size = int(config.get("train").get("batch_size"))
+    lr = float(config.get("train").get("lr"))
+    weight_decay = float(config.get("train").get("weight_decay"))
+    epochs = int(config.get("train").get("epochs"))
+
+    hidden_layers = int(config.get("model").get("hidden"))
+    n_layers = int(config.get("model").get("n_layers"))
+    dropout = float(config.get("model").get("dropout"))
+    X, y, train, val, _, _ = prepare_data(split_seed=split_seed)
+    train_loader = DataLoader(make_dataset(X, y, train), batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(make_dataset(X, y, val), batch_size=batch_size)
+    model = configure_mlp(n_layers, hidden_layers, dropout)
     train_model(
         model,
-        num_epochs=10,
-        lr=1e-3,
+        num_epochs=epochs,
+        lr=lr,
         train_loader=train_loader,
         val_loader=val_loader,
-        weight_decay=0.0,
+        weight_decay=weight_decay,
     )
 
 
