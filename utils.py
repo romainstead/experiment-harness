@@ -120,7 +120,32 @@ def eval_model(model, test_loader, device="cpu"):
     return correct / total
 
 
-def make_dataset(X, y, idxs):
+def write_predictions(model, loader, writer, split):
+    model.eval()
+    device = next(model.parameters()).device
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for digits, labels, indices in loader:
+            predicted = model(digits.to(device)).argmax(dim=1).cpu()
+            writer.writerows(
+                (split, index, y_true, y_pred)
+                for index, y_true, y_pred in zip(
+                    indices.tolist(), labels.tolist(), predicted.tolist()
+                )
+            )
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    return correct / total
+
+
+def make_dataset(X, y, idxs, *, include_indices=False):
     Xt = torch.tensor(X[idxs] / 16.0, dtype=torch.float32)
     yt = torch.tensor(y[idxs], dtype=torch.long)
+    if include_indices:
+        indices = torch.as_tensor(idxs, dtype=torch.long)
+        return TensorDataset(Xt, yt, indices)
     return TensorDataset(Xt, yt)
+

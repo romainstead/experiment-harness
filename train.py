@@ -1,17 +1,22 @@
 import argparse
 import hashlib
 import json
+import math
 import os
+import subprocess
+from datetime import datetime
 from pathlib import Path
 
 import mlflow
 import numpy as np
 import sklearn
+import torch
 import yaml
+import optuna
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from utils import seed_everything, configure_mlp, train_model, make_dataset, eval_model, CSV_FIELDS
+from utils import seed_everything, configure_mlp, train_model, make_dataset, write_predictions, CSV_FIELDS
 import uuid
 import csv
 
@@ -54,6 +59,28 @@ def load_yaml(path):
     return data
 
 
+def summarize_metrics(run_dir, eval_test):
+    with (run_dir / "history.csv").open(newline="", encoding="utf-8") as history_file:
+        history = list(csv.DictReader(history_file))
+    if not history:
+        raise ValueError("history.csv contains no completed epochs")
+
+    with (run_dir / "predictions.csv").open(newline="", encoding="utf-8") as predictions_file:
+        predictions = list(csv.DictReader(predictions_file))
+
+    metrics = {
+        "val_loss": float(history[-1]["val_loss"]),
+        "training_time_seconds": math.fsum(float(row["epoch_time"]) for row in history),
+    }
+    for split in ("val", "test") if eval_test else ("val",):
+        rows = [row for row in predictions if row["split"] == split]
+        if not rows:
+            raise ValueError(f"predictions.csv contains no predictions for {split}")
+        metrics[f"{split}_acc"] = sum(row["y_true"] == row["y_pred"] for row in rows) / len(rows)
+
+    return metrics
+
+
 def main():
     os.makedirs("runs", exist_ok=True)
     parser = argparse.ArgumentParser()
@@ -80,8 +107,24 @@ def main():
 
     run_id = uuid.uuid4().hex
     os.makedirs(f"runs/{run_id}")
+
     with open(f"runs/{run_id}/config.yaml", "w") as yaml_config:
         yaml.dump(config, yaml_config)
+
+    X, y, train, val, test, sha = prepare_data(split_seed=split_seed)
+    repo_dir = Path(__file__).resolve().parent
+    metadata = {"run_id": run_id, "status": "RUNNING", "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "end_time": "", "commit": subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip(), "python_version": "", "pytorch_version": torch.__version__,
+                "sklearn_version": sklearn.__version__, "optuna_version": optuna.__version__,
+                "mlflow_version": mlflow.__version__, "num_threads": config.get("runtime").get("num_threads"),
+                "seed": args.seed, "split_sha": sha}
+
     with open(f"runs/{run_id}/history.csv", "w", newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow(CSV_FIELDS)
@@ -98,25 +141,59 @@ def main():
                 "hidden": hidden_layers,
                 "dropout": dropout,
             })
-            X, y, train, val, test, sha = prepare_data(split_seed=split_seed)
+
             mlflow.set_tag("split_sha256", sha)
             train_loader = DataLoader(make_dataset(X, y, train), batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(make_dataset(X, y, val), batch_size=batch_size)
 
             model = configure_mlp(n_layers, hidden_layers, dropout)
-            train_model(
-                model,
-                num_epochs=epochs,
-                lr=lr,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                weight_decay=weight_decay,
-                csv_file=csv_file
-            )
-            if args.eval_test:
-                test_loader = DataLoader(make_dataset(X, y, test), batch_size=batch_size)
-                test_accuracy = eval_model(model, test_loader)
-                print(f"Test accuracy: {test_accuracy:.2%}")
+            try:
+                model = train_model(
+                    model,
+                    num_epochs=epochs,
+                    lr=lr,
+                    train_loader=train_loader,
+                    val_loader=val_loader,
+                    weight_decay=weight_decay,
+                    csv_file=csv_file
+                )
+
+                run_dir = Path("runs") / run_id
+                predictions_path = run_dir / "predictions.csv"
+                with predictions_path.open("w", newline="", encoding="utf-8") as predictions_file:
+                    writer = csv.writer(predictions_file)
+                    writer.writerow(["split", "index", "y_true", "y_pred"])
+
+                    val_predictions_loader = DataLoader(
+                        make_dataset(X, y, val, include_indices=True),
+                        batch_size=batch_size,
+                    )
+                    write_predictions(model, val_predictions_loader, writer, "val")
+
+                    if args.eval_test:
+                        test_loader = DataLoader(
+                            make_dataset(X, y, test, include_indices=True),
+                            batch_size=batch_size,
+                        )
+                        write_predictions(model, test_loader, writer, "test")
+
+                csv_file.flush()
+                metrics = summarize_metrics(run_dir, args.eval_test)
+                (run_dir / "metrics.json").write_text(
+                    json.dumps(metrics, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                if args.eval_test:
+                    print(f"Test accuracy: {metrics['test_acc']:.2%}")
+            except Exception as e:
+                metadata["status"] = "FAILED"
+                raise
+            else:
+                metadata["status"] = "COMPLETED"
+            finally:
+                metadata["end_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(f"runs/{run_id}/metadata.json", "w") as meta_file:
+                    json.dump(metadata, meta_file, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":
