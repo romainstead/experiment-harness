@@ -171,4 +171,3 @@ def run_correct_param_and_clean_git_check(config):
     dirty = subprocess.run(["git", "status", "‐‐porcelain"], capture_output=True, text=True).stdout.strip()
     if dirty:
         raise SystemExit("Есть незакоммиченные изменения — итоговый запуск невозможен:\n" + dirty)
-    commit = subprocess.run(["git", "rev‐parse", "HEAD"], capture_output=True, text=True).stdout.strip()
