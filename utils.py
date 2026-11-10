@@ -1,5 +1,6 @@
 import os
 import random
+import subprocess
 import time
 
 import numpy as np
@@ -149,3 +150,25 @@ def make_dataset(X, y, idxs, *, include_indices=False):
         return TensorDataset(Xt, yt, indices)
     return TensorDataset(Xt, yt)
 
+
+def run_correct_param_and_clean_git_check(config):
+    if int(config.get("split_seed")) < 0:
+        raise ValueError("split_seed должен быть >= 0")
+    if float(config.get("train").get("weight_decay")) < 0:
+        raise ValueError("weight_decay должен быть >= 0")
+
+    positive_params = {
+        "batch_size": int(config.get("train").get("batch_size")),
+        "lr": float(config.get("train").get("lr")),
+        "epochs": int(config.get("train").get("epochs")),
+        "hidden": int(config.get("model").get("hidden")),
+        "n_layers": int(config.get("model").get("n_layers")),
+    }
+    for name, value in positive_params.items():
+        if value <= 0:
+            raise SystemExit(f"{name} должен быть > 0, получено {value}")
+
+    dirty = subprocess.run(["git", "status", "‐‐porcelain"], capture_output=True, text=True).stdout.strip()
+    if dirty:
+        raise SystemExit("Есть незакоммиченные изменения — итоговый запуск невозможен:\n" + dirty)
+    commit = subprocess.run(["git", "rev‐parse", "HEAD"], capture_output=True, text=True).stdout.strip()

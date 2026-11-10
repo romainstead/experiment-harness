@@ -1,6 +1,5 @@
 experiment: lr0
 split_seed: 0
-seed: 0
 
 model: {
   n_layers: 1,

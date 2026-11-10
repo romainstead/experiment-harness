@@ -16,7 +16,7 @@ import optuna
 from sklearn.datasets import load_digits
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from utils import seed_everything, configure_mlp, train_model, make_dataset, write_predictions, CSV_FIELDS
+from utils import seed_everything, configure_mlp, train_model, make_dataset, write_predictions, CSV_FIELDS, run_correct_param_and_clean_git_check
 import uuid
 import csv
 
@@ -105,7 +105,7 @@ def main():
     n_layers = int(config.get("model").get("n_layers"))
     dropout = float(config.get("model").get("dropout"))
 
-    run_id = uuid.uuid4().hex
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + "_" + uuid.uuid4().hex[:16]
     os.makedirs(f"runs/{run_id}")
 
     with open(f"runs/{run_id}/config.yaml", "w") as yaml_config:
@@ -148,6 +148,7 @@ def main():
 
             model = configure_mlp(n_layers, hidden_layers, dropout)
             try:
+                run_correct_param_and_clean_git_check(config)
                 model = train_model(
                     model,
                     num_epochs=epochs,
