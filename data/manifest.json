@@ -1,0 +1,24 @@
+{
+  "lr0_digits": {
+    "source": "sklearn.datasets.load_digits",
+    "version": "scikit-learn 1.9.1",
+    "selection": {
+      "total": 1797,
+      "used": 1797,
+      "excluded": 0
+    },
+    "split_rule": "stratified by class, split_seed=0: test = 20% of all; val = 25% of the remainder; train = the rest",
+    "files": [
+      {
+        "path": "data/split.json",
+        "sha256": "2b2308c4d32fad65658818734ed79e1afaa26f572b433b7d810ad345d062589d",
+        "records": 1797
+      }
+    ],
+    "sizes": {
+      "train": 1077,
+      "val": 360,
+      "test": 360
+    }
+  }
+}
